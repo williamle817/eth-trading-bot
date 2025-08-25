@@ -1,1 +1,1 @@
-# eth-trading-bot
+# Ethereum Trading Bot
