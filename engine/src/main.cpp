@@ -72,20 +72,36 @@ int main(int argc, char** argv) {
                 continue;
             }
             auto sig = crossover_signal(cs, f, s);
-            std::cout << k.start << " price=" << k.close
-                      << " ema" << cfg.fast << "=" << f
-                      << " ema" << cfg.slow << "=" << s
-                      << " signal=" << to_str(sig) << "\n";
+            auto sigstr = sigstr_from_signal(sig);
 
-            if (sig==Signal::BUY || sig==Signal::SELL) {
-                if (cfg.dry_run) {
-                    std::cout << "DRY-RUN: would place " << to_str(sig) << " " << cfg.size << " ETH\n";
+            // default: no acion
+            std::string action = "NONE";
+            std::string reason;
+            if (sig == Signal::BUY || sig == Signal::SELL) {
+                Side side = side_from_signal(sig);
+
+                bool ok = allow_order(limits, rstate, side, std::stod(cfg.size), k.close, k.start, reason);
+                if (!ok) {
+                    action = "BLOCKED";
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, reason);
+                    std::cout << "BLOCKED: " << reason << "\n";
+                } else if (cfg.dry_run) {
+                    action = (sig == Signal::BUY ? "BUY" : "SELL");
+                    on_fill(rstate, side, std::stod(cfg.size), k.close, k.start);
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
+                    std::cout << "DRY-RUN FILLED " << action << " " << cfg.size
+                            << " @ " << k.close << " pos=" << rstate.position_eth
+                            << " pnl=" << rstate.realized_pnl << "\n";
                 } else {
-                    std::string side = (sig==Signal::BUY) ? "BUY" : "SELL";
-                    std::string bearer; // TODO: supply JWT/HMAC auth
-                    auto j = place_market_order(cfg.sandbox, side, cfg.size, bearer);
-                    std::cout << "Order response: " << j.dump() << "\n";
+                    action = (sig == Signal::BUY ? "BUY" : "SELL");
+                    std::string bearer;
+                    auto j = place_market_order(cfg.sandbox, action, cfg.size, bearer);
+                    on_fill(rstate, side, std::stod(cfg.size), k.close, k.start);
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
+                    std::cout << "LIVE order response: " << j.dump() << "\n";
                 }
+            } else {
+                logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
             }
         }
         return 0;
