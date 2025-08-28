@@ -4,6 +4,8 @@
 #include "order_placer.hpp"
 #include <iostream>
 #include <string>
+#include "risk.hpp"
+#include "logger.hpp"
 
 struct Config {
     std::string data_api = "http://localhost:8000";
@@ -18,6 +20,7 @@ struct Config {
 };
 
 Config parse_args(int argc, char** argv) {
+
     Config c;
     for (int i=1; i<argc; ++i) {
         std::string a = argv[i];
@@ -51,6 +54,16 @@ int main(int argc, char** argv) {
         EMA ema_f(cfg.fast), ema_s(cfg.slow);
         CrossState cs;
 
+        logger_init("logs/strategy_log.csv");
+
+        RiskLimits limits;
+        limits.max_position_abs = 0.05;
+        limits.max_daily_loss   = 50.0;
+        limits.cooldown_seconds = 60;
+        limits.long_only        = true;
+
+        RiskState rstate;
+
         for (auto& k : candles) {
             double f = ema_f.update(k.close);
             double s = ema_s.update(k.close);
@@ -59,20 +72,36 @@ int main(int argc, char** argv) {
                 continue;
             }
             auto sig = crossover_signal(cs, f, s);
-            std::cout << k.start << " price=" << k.close
-                      << " ema" << cfg.fast << "=" << f
-                      << " ema" << cfg.slow << "=" << s
-                      << " signal=" << to_str(sig) << "\n";
+            auto sigstr = sigstr_from_signal(sig);
 
-            if (sig==Signal::BUY || sig==Signal::SELL) {
-                if (cfg.dry_run) {
-                    std::cout << "DRY-RUN: would place " << to_str(sig) << " " << cfg.size << " ETH\n";
+            // default: no acion
+            std::string action = "NONE";
+            std::string reason;
+            if (sig == Signal::BUY || sig == Signal::SELL) {
+                Side side = side_from_signal(sig);
+
+                bool ok = allow_order(limits, rstate, side, std::stod(cfg.size), k.close, k.start, reason);
+                if (!ok) {
+                    action = "BLOCKED";
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, reason);
+                    std::cout << "BLOCKED: " << reason << "\n";
+                } else if (cfg.dry_run) {
+                    action = (sig == Signal::BUY ? "BUY" : "SELL");
+                    on_fill(rstate, side, std::stod(cfg.size), k.close, k.start);
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
+                    std::cout << "DRY-RUN FILLED " << action << " " << cfg.size
+                            << " @ " << k.close << " pos=" << rstate.position_eth
+                            << " pnl=" << rstate.realized_pnl << "\n";
                 } else {
-                    std::string side = (sig==Signal::BUY) ? "BUY" : "SELL";
-                    std::string bearer; // TODO: supply JWT/HMAC auth
-                    auto j = place_market_order(cfg.sandbox, side, cfg.size, bearer);
-                    std::cout << "Order response: " << j.dump() << "\n";
+                    action = (sig == Signal::BUY ? "BUY" : "SELL");
+                    std::string bearer;
+                    auto j = place_market_order(cfg.sandbox, action, cfg.size, bearer);
+                    on_fill(rstate, side, std::stod(cfg.size), k.close, k.start);
+                    logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
+                    std::cout << "LIVE order response: " << j.dump() << "\n";
                 }
+            } else {
+                logger_row(k.start, k.close, f, s, sigstr, action, rstate.position_eth, rstate.realized_pnl, "");
             }
         }
         return 0;
@@ -80,4 +109,13 @@ int main(int argc, char** argv) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
+}
+
+static SigStr sigstr_from_signal(Signal s) {
+    if (s == Signal::BUY)  return SigStr::Buy;
+    if (s == Signal::SELL) return SigStr::Sell;
+    return SigStr::Hold;
+}
+static Side side_from_signal(Signal s) {
+    return (s == Signal::SELL) ? Side::Sell : Side::Buy;
 }
