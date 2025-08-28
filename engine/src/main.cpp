@@ -4,6 +4,8 @@
 #include "order_placer.hpp"
 #include <iostream>
 #include <string>
+#include "risk.hpp"
+#include "logger.hpp"
 
 struct Config {
     std::string data_api = "http://localhost:8000";
