@@ -20,6 +20,7 @@ struct Config {
 };
 
 Config parse_args(int argc, char** argv) {
+
     Config c;
     for (int i=1; i<argc; ++i) {
         std::string a = argv[i];
@@ -53,6 +54,16 @@ int main(int argc, char** argv) {
         EMA ema_f(cfg.fast), ema_s(cfg.slow);
         CrossState cs;
 
+        logger_init("logs/strategy_log.csv");
+
+        RiskLimits limits;
+        limits.max_position_abs = 0.05;
+        limits.max_daily_loss   = 50.0;
+        limits.cooldown_seconds = 60;
+        limits.long_only        = true;
+
+        RiskState rstate;
+
         for (auto& k : candles) {
             double f = ema_f.update(k.close);
             double s = ema_s.update(k.close);
@@ -82,4 +93,13 @@ int main(int argc, char** argv) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
+}
+
+static SigStr sigstr_from_signal(Signal s) {
+    if (s == Signal::BUY)  return SigStr::Buy;
+    if (s == Signal::SELL) return SigStr::Sell;
+    return SigStr::Hold;
+}
+static Side side_from_signal(Signal s) {
+    return (s == Signal::SELL) ? Side::Sell : Side::Buy;
 }
